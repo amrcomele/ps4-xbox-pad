@@ -13,10 +13,10 @@ jobs:
     - name: Scarica il codice del repository
       uses: actions/checkout@v4
 
-    - name: Installa dipendenze e Clang
+    - name: Installa dipendenze, Clang e LLVM (include llvm-ar)
       run: |
         sudo apt-get update
-        sudo apt-get install -y clang lld cmake make wget tar git dos2unix
+        sudo apt-get install -y clang lld llvm cmake make wget tar git dos2unix
 
     - name: Scarica OpenOrbis PS4 Toolchain ufficiale
       run: |
@@ -27,11 +27,9 @@ jobs:
         if [ -f /tmp/oo.tar.gz ] && [ -s /tmp/oo.tar.gz ]; then
           tar -xzf /tmp/oo.tar.gz -C /tmp/openorbis
         fi
-        # Trova automaticamente la cartella dove si trova create-fself
         TOOLCHAIN_DIR=$(dirname $(dirname $(dirname $(find /tmp/openorbis -name "create-fself" | head -n 1))))
         chmod +x "$TOOLCHAIN_DIR/bin/linux/"*
         echo "OO_PS4_TOOLCHAIN=$TOOLCHAIN_DIR" >> $GITHUB_ENV
-        echo "Toolchain trovata in: $TOOLCHAIN_DIR"
 
     - name: Scarica e compila GoldHEN Plugins SDK
       run: |
@@ -42,23 +40,29 @@ jobs:
 
     - name: Compila main.c in xbox_pad.prx
       run: |
-        # Rinomina automaticamente se salvato come .txt o in sottocartelle
         if [ -f "main.c.txt" ]; then mv main.c.txt main.c; fi
         dos2unix main.c
 
-        clang --target=x86_64-pc-freebsd12-elf -fPIC -O2 \
-          -I"$OO_PS4_TOOLCHAIN/include" \
+        # 1. Compila main.c usando gli stessi flag di GoldHEN SDK
+        clang --target=x86_64-pc-freebsd12-elf -fPIC -funwind-tables -O2 \
+          -isysroot "$OO_PS4_TOOLCHAIN" \
+          -isystem "$OO_PS4_TOOLCHAIN/include" \
           -I"$GOLDHEN_SDK/include" \
           -c main.c -o main.o
 
-        ld.lld main.o -o xbox_pad.elf \
-          -m elf_x86_64 -pie --script "$OO_PS4_TOOLCHAIN/link.x" \
+        # 2. Collega l'oggetto con la libreria libGoldHEN_Hook.a appena creata
+        ld.lld -m elf_x86_64 -pie \
+          --script "$OO_PS4_TOOLCHAIN/link.x" \
           -e _init --eh-frame-hdr \
+          -o xbox_pad.elf \
           -L"$OO_PS4_TOOLCHAIN/lib" \
-          -L"$GOLDHEN_SDK/build" \
           -L"$GOLDHEN_SDK" \
-          -lGoldHEN_Hook -lScePad -lScePosix -lkernel
+          -L"$GOLDHEN_SDK/build" \
+          "$GOLDHEN_SDK/build/crtprx.o" \
+          main.o \
+          -lGoldHEN_Hook -lScePad -lScePosix -lkernel -lc
 
+        # 3. Crea il file .prx firmato per PS4
         "$OO_PS4_TOOLCHAIN/bin/linux/create-fself" \
           -in=xbox_pad.elf \
           -out=xbox_pad.oelf \
