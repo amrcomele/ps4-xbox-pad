@@ -7,48 +7,51 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
     - name: Scarica il codice del repository
       uses: actions/checkout@v4
 
-    - name: Installa Clang e dipendenze
+    - name: Installa dipendenze e Clang
       run: |
         sudo apt-get update
-        sudo apt-get install -y clang lld cmake make wget unzip git dos2unix
+        sudo apt-get install -y clang lld cmake make wget tar git dos2unix
 
-    - name: Scarica OpenOrbis PS4 Toolchain
+    - name: Scarica OpenOrbis PS4 Toolchain ufficiale
       run: |
         mkdir -p /tmp/openorbis
-        wget -q https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/releases/download/v0.5.2/v0.5.2.tar.gz -O /tmp/oo.tar.gz
-        tar -xzf /tmp/oo.tar.gz -C /tmp/openorbis
-        chmod +x /tmp/openorbis/PS4Toolchain/bin/linux/*
+        wget -q https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/releases/download/v0.5.2/v0.5.2.tar.gz -O /tmp/oo.tar.gz || \
+        wget -q https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/releases/download/v0.5.3/v0.5.3.tar.gz -O /tmp/oo.tar.gz || \
+        git clone --depth 1 https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain.git /tmp/openorbis/PS4Toolchain
+        if [ -f /tmp/oo.tar.gz ] && [ -s /tmp/oo.tar.gz ]; then
+          tar -xzf /tmp/oo.tar.gz -C /tmp/openorbis
+        fi
+        # Trova automaticamente la cartella dove si trova create-fself
+        TOOLCHAIN_DIR=$(dirname $(dirname $(dirname $(find /tmp/openorbis -name "create-fself" | head -n 1))))
+        chmod +x "$TOOLCHAIN_DIR/bin/linux/"*
+        echo "OO_PS4_TOOLCHAIN=$TOOLCHAIN_DIR" >> $GITHUB_ENV
+        echo "Toolchain trovata in: $TOOLCHAIN_DIR"
 
     - name: Scarica e compila GoldHEN Plugins SDK
       run: |
-        git clone https://github.com/GoldHEN/GoldHEN_Plugins_SDK.git /tmp/gh_sdk
+        git clone --recursive https://github.com/GoldHEN/GoldHEN_Plugins_SDK.git /tmp/gh_sdk
         cd /tmp/gh_sdk
-        export OO_PS4_TOOLCHAIN=/tmp/openorbis/PS4Toolchain
         make
+        echo "GOLDHEN_SDK=/tmp/gh_sdk" >> $GITHUB_ENV
 
-    - name: Verifica e compila main.c in xbox_pad.prx
+    - name: Compila main.c in xbox_pad.prx
       run: |
-        export OO_PS4_TOOLCHAIN=/tmp/openorbis/PS4Toolchain
-        export GOLDHEN_SDK=/tmp/gh_sdk
-
-        # Rimuove eventuali estensioni .txt nascoste e caratteri Windows
+        # Rinomina automaticamente se salvato come .txt o in sottocartelle
         if [ -f "main.c.txt" ]; then mv main.c.txt main.c; fi
         dos2unix main.c
 
-        # 1. Compila main.c in main.o
-        clang --target=x86_64-pc-freebsd12-elf -fPIC -O2 -Wall \
+        clang --target=x86_64-pc-freebsd12-elf -fPIC -O2 \
           -I"$OO_PS4_TOOLCHAIN/include" \
           -I"$GOLDHEN_SDK/include" \
           -c main.c -o main.o
 
-        # 2. Collega le librerie e crea l'ELF
-        ld.lld main.o -o xbox_pad.prx.elf \
+        ld.lld main.o -o xbox_pad.elf \
           -m elf_x86_64 -pie --script "$OO_PS4_TOOLCHAIN/link.x" \
           -e _init --eh-frame-hdr \
           -L"$OO_PS4_TOOLCHAIN/lib" \
@@ -56,16 +59,15 @@ jobs:
           -L"$GOLDHEN_SDK" \
           -lGoldHEN_Hook -lScePad -lScePosix -lkernel
 
-        # 3. Converte in formato firmato PS4 (.prx)
         "$OO_PS4_TOOLCHAIN/bin/linux/create-fself" \
-          -in=xbox_pad.prx.elf \
-          -out=xbox_pad.prx.oelf \
+          -in=xbox_pad.elf \
+          -out=xbox_pad.oelf \
           --lib=xbox_pad.prx \
           --paid 0x3800000000000011
 
-        mv xbox_pad.prx.oelf xbox_pad.prx
+        mv xbox_pad.oelf xbox_pad.prx
 
-    - name: Carica il file xbox_pad.prx pronto
+    - name: Salva xbox_pad.prx pronto da scaricare
       uses: actions/upload-artifact@v4
       with:
         name: Plugin-Compilato-PS4
