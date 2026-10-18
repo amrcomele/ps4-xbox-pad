@@ -10,7 +10,6 @@
 #include <orbis/libkernel.h>
 #include <Common.h>
 
-// Fallback di sicurezza se qualche macro varia tra versioni dell'SDK
 #ifndef attr_public
 #define attr_public __attribute__((visibility("default")))
 #endif
@@ -23,20 +22,18 @@ attr_public uint32_t g_pluginVersion = 0x00000100; // 1.00
 
 #define PORT 9999
 
-// Struttura del pacchetto inviato dal controller Xbox (12 byte, allineata)
 #pragma pack(push, 1)
 typedef struct {
-    uint16_t xinput_buttons; // Maschera pulsanti stile XInput
-    uint8_t  lt;             // Grilletto Sinistro (0-255)
-    uint8_t  rt;             // Grilletto Destro (0-255)
-    int16_t  lx;             // Stick SX X (-32768 a 32767)
-    int16_t  ly;             // Stick SX Y (-32768 a 32767)
-    int16_t  rx;             // Stick DX X (-32768 a 32767)
-    int16_t  ry;             // Stick DX Y (-32768 a 32767)
+    uint16_t xinput_buttons;
+    uint8_t  lt;
+    uint8_t  rt;
+    int16_t  lx;
+    int16_t  ly;
+    int16_t  rx;
+    int16_t  ry;
 } XboxInputPacket;
 #pragma pack(pop)
 
-// Maschere standard protocollo Xbox Wired (XInput)
 #define XBOX_DPAD_UP        0x0001
 #define XBOX_DPAD_DOWN      0x0002
 #define XBOX_DPAD_LEFT      0x0004
@@ -58,7 +55,6 @@ static volatile int g_hasActiveInput = 0;
 static volatile int g_running = 1;
 static pthread_t g_netThread;
 
-// Converte l'asse firmato 16-bit Xbox (-32768..32767) in 8-bit unsigned PS4 (0..255, centro 128)
 static inline uint8_t scale_axis(int16_t val, int invert) {
     int32_t v = val;
     if (invert) v = -v - 1;
@@ -68,7 +64,6 @@ static inline uint8_t scale_axis(int16_t val, int invert) {
     return (uint8_t)scaled;
 }
 
-// Traduce la bitmask Xbox nella bitmask OrbisPad della PS4
 static uint32_t translate_buttons(uint16_t xbtns, uint8_t lt, uint8_t rt) {
     uint32_t ps4_btns = 0;
 
@@ -95,7 +90,6 @@ static uint32_t translate_buttons(uint16_t xbtns, uint8_t lt, uint8_t rt) {
     return ps4_btns;
 }
 
-// Inietta i dati tradotti nella struttura del gioco
 static void apply_xbox_to_orbis(OrbisPadData *pData) {
     if (!pData || !g_hasActiveInput) return;
 
@@ -113,7 +107,6 @@ static void apply_xbox_to_orbis(OrbisPadData *pData) {
     pData->connected = 1;
 }
 
-// Thread in ascolto per i pacchetti raw del controller Xbox
 static void* xbox_receiver_thread(void* arg) {
     int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0) return NULL;
@@ -142,10 +135,6 @@ static void* xbox_receiver_thread(void* arg) {
     return NULL;
 }
 
-// ============================================================================
-// HOOKS DELLE FUNZIONI DI SISTEMA LIBSCEPAD
-// ============================================================================
-
 typedef int (*scePadReadState_t)(int32_t handle, OrbisPadData *pData);
 typedef int (*scePadRead_t)(int32_t handle, OrbisPadData *pData, int32_t num);
 
@@ -173,8 +162,7 @@ int scePadRead_hook(int32_t handle, OrbisPadData *pData, int32_t num) {
     return ret;
 }
 
-// Entrypoint di avvio del plugin
-int32_t attr_public plugin_load(int32_t argc, const char* argv[]) {
+int32_t attr_public module_start(size_t argc, const void* args) {
     g_running = 1;
     pthread_create(&g_netThread, NULL, xbox_receiver_thread, NULL);
 
@@ -184,8 +172,7 @@ int32_t attr_public plugin_load(int32_t argc, const char* argv[]) {
     return 0;
 }
 
-// Entrypoint di chiusura del plugin
-int32_t attr_public plugin_unload(int32_t argc, const char* argv[]) {
+int32_t attr_public module_stop(size_t argc, const void* args) {
     g_running = 0;
     UNHOOK(scePadReadState);
     UNHOOK(scePadRead);
