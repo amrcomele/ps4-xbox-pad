@@ -13,17 +13,17 @@ jobs:
     - name: Scarica il codice del repository
       uses: actions/checkout@v4
 
-    - name: Installa Clang e dipendenze Linux
+    - name: Installa Clang e dipendenze
       run: |
         sudo apt-get update
-        sudo apt-get install -y clang lld cmake make wget unzip git
+        sudo apt-get install -y clang lld cmake make wget unzip git dos2unix
 
-    - name: Scarica e installa OpenOrbis PS4 Toolchain
+    - name: Scarica OpenOrbis PS4 Toolchain
       run: |
         mkdir -p /tmp/openorbis
         wget -q https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/releases/download/v0.5.2/v0.5.2.tar.gz -O /tmp/oo.tar.gz
         tar -xzf /tmp/oo.tar.gz -C /tmp/openorbis
-        echo "OO_PS4_TOOLCHAIN=/tmp/openorbis/PS4Toolchain" >> $GITHUB_ENV
+        chmod +x /tmp/openorbis/PS4Toolchain/bin/linux/*
 
     - name: Scarica e compila GoldHEN Plugins SDK
       run: |
@@ -31,15 +31,41 @@ jobs:
         cd /tmp/gh_sdk
         export OO_PS4_TOOLCHAIN=/tmp/openorbis/PS4Toolchain
         make
-        echo "GOLDHEN_SDK=/tmp/gh_sdk" >> $GITHUB_ENV
 
-    - name: Compila xbox_pad.prx
+    - name: Verifica e compila main.c in xbox_pad.prx
       run: |
-        # Converte eventuali spazi in TAB nel Makefile per sicurezza
-        sed -i 's/^   	/\t/g; s/^    /\t/g' Makefile
-        make
+        export OO_PS4_TOOLCHAIN=/tmp/openorbis/PS4Toolchain
+        export GOLDHEN_SDK=/tmp/gh_sdk
 
-    - name: Carica il file xbox_pad.prx pronto per il download
+        # Rimuove eventuali estensioni .txt nascoste e caratteri Windows
+        if [ -f "main.c.txt" ]; then mv main.c.txt main.c; fi
+        dos2unix main.c
+
+        # 1. Compila main.c in main.o
+        clang --target=x86_64-pc-freebsd12-elf -fPIC -O2 -Wall \
+          -I"$OO_PS4_TOOLCHAIN/include" \
+          -I"$GOLDHEN_SDK/include" \
+          -c main.c -o main.o
+
+        # 2. Collega le librerie e crea l'ELF
+        ld.lld main.o -o xbox_pad.prx.elf \
+          -m elf_x86_64 -pie --script "$OO_PS4_TOOLCHAIN/link.x" \
+          -e _init --eh-frame-hdr \
+          -L"$OO_PS4_TOOLCHAIN/lib" \
+          -L"$GOLDHEN_SDK/build" \
+          -L"$GOLDHEN_SDK" \
+          -lGoldHEN_Hook -lScePad -lScePosix -lkernel
+
+        # 3. Converte in formato firmato PS4 (.prx)
+        "$OO_PS4_TOOLCHAIN/bin/linux/create-fself" \
+          -in=xbox_pad.prx.elf \
+          -out=xbox_pad.prx.oelf \
+          --lib=xbox_pad.prx \
+          --paid 0x3800000000000011
+
+        mv xbox_pad.prx.oelf xbox_pad.prx
+
+    - name: Carica il file xbox_pad.prx pronto
       uses: actions/upload-artifact@v4
       with:
         name: Plugin-Compilato-PS4
