@@ -8,7 +8,12 @@
 #include <unistd.h>
 #include <orbis/Pad.h>
 #include <orbis/libkernel.h>
-#include "GoldHEN.h"
+#include <Common.h>
+
+// Fallback di sicurezza se qualche macro varia tra versioni dell'SDK
+#ifndef attr_public
+#define attr_public __attribute__((visibility("default")))
+#endif
 
 // Metadati richiesti dal GoldHEN Plugin Loader
 attr_public const char *g_pluginName = "xbox_pad_translator";
@@ -73,7 +78,7 @@ static uint32_t translate_buttons(uint16_t xbtns, uint8_t lt, uint8_t rt) {
     if (xbtns & XBOX_DPAD_RIGHT) ps4_btns |= ORBIS_PAD_BUTTON_RIGHT;
 
     if (xbtns & XBOX_START)      ps4_btns |= ORBIS_PAD_BUTTON_OPTIONS;
-    if (xbtns & XBOX_BACK)       ps4_btns |= ORBIS_PAD_BUTTON_TOUCH_PAD; // Back mappato su click Touchpad
+    if (xbtns & XBOX_BACK)       ps4_btns |= ORBIS_PAD_BUTTON_TOUCH_PAD;
     if (xbtns & XBOX_LTHUMB)     ps4_btns |= ORBIS_PAD_BUTTON_L3;
     if (xbtns & XBOX_RTHUMB)     ps4_btns |= ORBIS_PAD_BUTTON_R3;
     if (xbtns & XBOX_LB)         ps4_btns |= ORBIS_PAD_BUTTON_L1;
@@ -84,7 +89,6 @@ static uint32_t translate_buttons(uint16_t xbtns, uint8_t lt, uint8_t rt) {
     if (xbtns & XBOX_X)          ps4_btns |= ORBIS_PAD_BUTTON_SQUARE;
     if (xbtns & XBOX_Y)          ps4_btns |= ORBIS_PAD_BUTTON_TRIANGLE;
 
-    // Soglia digitale per L2 e R2
     if (lt > 30)                 ps4_btns |= ORBIS_PAD_BUTTON_L2;
     if (rt > 30)                 ps4_btns |= ORBIS_PAD_BUTTON_R2;
 
@@ -97,12 +101,10 @@ static void apply_xbox_to_orbis(OrbisPadData *pData) {
 
     XboxInputPacket snap = g_currentXboxState;
 
-    // Uniamo i pulsanti (OR logico così il DualShock 4 originale continua a funzionare insieme)
     pData->buttons |= translate_buttons(snap.xinput_buttons, snap.lt, snap.rt);
 
-    // Sovrascriviamo gli stick solo se il controller Xbox è attivo o fuori dalla deadzone
     pData->leftStick.x  = scale_axis(snap.lx, 0);
-    pData->leftStick.y  = scale_axis(snap.ly, 1); // L'asse Y su PS4 è invertito rispetto a XInput
+    pData->leftStick.y  = scale_axis(snap.ly, 1);
     pData->rightStick.x = scale_axis(snap.rx, 0);
     pData->rightStick.y = scale_axis(snap.ry, 1);
 
@@ -144,11 +146,14 @@ static void* xbox_receiver_thread(void* arg) {
 // HOOKS DELLE FUNZIONI DI SISTEMA LIBSCEPAD
 // ============================================================================
 
+typedef int (*scePadReadState_t)(int32_t handle, OrbisPadData *pData);
+typedef int (*scePadRead_t)(int32_t handle, OrbisPadData *pData, int32_t num);
+
 HOOK_INIT(scePadReadState);
 HOOK_INIT(scePadRead);
 
 int scePadReadState_hook(int32_t handle, OrbisPadData *pData) {
-    int ret = HOOK_CONTINUE(scePadReadState, int (*)(int32_t, OrbisPadData *), handle, pData);
+    int ret = HOOK_CONTINUE(scePadReadState, scePadReadState_t, handle, pData);
     if (ret == 0 && pData != NULL) {
         apply_xbox_to_orbis(pData);
     }
@@ -156,10 +161,10 @@ int scePadReadState_hook(int32_t handle, OrbisPadData *pData) {
 }
 
 int scePadRead_hook(int32_t handle, OrbisPadData *pData, int32_t num) {
-    int ret = HOOK_CONTINUE(scePadRead, int (*)(int32_t, OrbisPadData *, int32_t), handle, pData, num);
+    int ret = HOOK_CONTINUE(scePadRead, scePadRead_t, handle, pData, num);
     if (ret >= 0 && pData != NULL) {
         if (ret == 0 && g_hasActiveInput) {
-            ret = 1; // Forza almeno 1 pacchetto letto se il DS4 è fermo ma l'Xbox invia dati
+            ret = 1;
         }
         for (int i = 0; i < ret; i++) {
             apply_xbox_to_orbis(&pData[i]);
